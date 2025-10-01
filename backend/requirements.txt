@@ -1,0 +1,63 @@
+# LibrasLive Backend Requirements
+# Core web framework
+Flask==3.0.0
+flask-socketio==5.3.6
+python-socketio==5.9.0
+
+# Deep Learning and ML
+torch==2.1.0
+torchvision==0.16.0
+numpy==1.24.3
+scikit-learn==1.3.0
+
+# Computer Vision
+opencv-python==4.8.1.78
+mediapipe==0.10.7
+
+# Text-to-Speech
+gtts==2.4.0
+pyttsx3==2.90
+
+# Audio processing
+playsound==1.3.0
+
+# Utilities
+python-dotenv==1.0.0
+requests==2.31.0
+
+# Data handling
+pandas==2.0.3
+Pillow==10.0.1
+
+# Development and testing
+pytest==7.4.2
+pytest-asyncio==0.21.1
+
+# Additional utilities for LIBRAS processing
+scipy==1.11.3
+matplotlib==3.7.2
+seaborn==0.12.2
+
+# Jupyter for notebooks
+jupyter==1.0.0
+ipykernel==6.25.2
+notebook==7.0.6
+
+# Progress bars and logging
+tqdm==4.66.1
+colorlog==6.7.0
+
+# WebSocket support
+eventlet==0.33.3
+python-engineio==4.7.1
+
+# HTTP client for external APIs
+httpx==0.25.0
+
+# Configuration management
+pyyaml==6.0.1
+configparser==6.0.0
+
+# Optional: GPU support (uncomment if using CUDA)
+# torch-audio==2.1.0+cu121
+# torchaudio==2.1.0+cu121

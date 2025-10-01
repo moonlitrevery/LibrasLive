@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LibrasLive - Tradutor de LIBRAS em Tempo Real</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <h1 class="logo">LibrasLive</h1>
+            <p class="subtitle">Tradutor de LIBRAS em Tempo Real</p>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <div class="container">
+            <!-- Status Bar -->
+            <div id="status-bar" class="status-bar">
+                <div id="connection-status" class="status-item">
+                    <span class="status-indicator disconnected"></span>
+                    <span>Conectando...</span>
+                </div>
+                <div id="camera-status" class="status-item">
+                    <span class="status-indicator disconnected"></span>
+                    <span>Câmera desconectada</span>
+                </div>
+                <div id="model-status" class="status-item">
+                    <span class="status-indicator disconnected"></span>
+                    <span>Modelos carregando...</span>
+                </div>
+            </div>
+
+            <!-- Video and Translation Section -->
+            <div class="content-grid">
+                <!-- Video Section -->
+                <div class="video-section">
+                    <div class="video-container">
+                        <video id="webcam" class="webcam" autoplay playsinline muted></video>
+                        <canvas id="landmarks-canvas" class="landmarks-canvas"></canvas>
+                        <div id="loading-overlay" class="loading-overlay">
+                            <div class="spinner"></div>
+                            <p>Carregando MediaPipe...</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Camera Controls -->
+                    <div class="controls">
+                        <button id="start-camera" class="btn btn-primary">Iniciar Câmera</button>
+                        <button id="stop-camera" class="btn btn-secondary" disabled>Parar Câmera</button>
+                        <button id="toggle-landmarks" class="btn btn-outline">Mostrar Pontos</button>
+                    </div>
+                </div>
+
+                <!-- Translation Section -->
+                <div class="translation-section">
+                    <div class="translation-container">
+                        <h2>Tradução</h2>
+                        
+                        <!-- Current Translation -->
+                        <div class="current-translation">
+                            <div id="translated-text" class="translated-text">
+                                Faça um sinal LIBRAS para ver a tradução
+                            </div>
+                            <div id="translation-info" class="translation-info">
+                                <span id="confidence-level"></span>
+                                <span id="translation-type"></span>
+                            </div>
+                        </div>
+
+                        <!-- Audio Controls -->
+                        <div class="audio-controls">
+                            <button id="repeat-audio" class="btn btn-audio" disabled>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M3 18v-6l4-4v10l-4-4zm2-4.5v1l1.5-1-1.5-1v1zm4-9.5v2h-2v10h2v2h8v-2h2v-10h-2v-2h-8zm2 2h4v8h-4v-8zm8 0h2v8h-2v-8z"/>
+                                </svg>
+                                Repetir Som
+                            </button>
+                            <div id="volume-control" class="volume-control">
+                                <label for="volume-slider">Volume:</label>
+                                <input type="range" id="volume-slider" min="0" max="100" value="80">
+                                <span id="volume-value">80%</span>
+                            </div>
+                        </div>
+
+                        <!-- Translation History -->
+                        <div class="history-section">
+                            <h3>Histórico</h3>
+                            <div id="translation-history" class="translation-history">
+                                <!-- History items will be added here dynamically -->
+                            </div>
+                            <button id="clear-history" class="btn btn-outline-small">Limpar Histórico</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Performance Metrics -->
+            <div class="metrics-section">
+                <h3>Métricas de Performance</h3>
+                <div class="metrics-grid">
+                    <div class="metric">
+                        <span class="metric-label">Latência:</span>
+                        <span id="latency-metric" class="metric-value">-- ms</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">FPS:</span>
+                        <span id="fps-metric" class="metric-value">-- fps</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Predições/min:</span>
+                        <span id="predictions-metric" class="metric-value">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Help Section -->
+            <div class="help-section">
+                <details class="help-details">
+                    <summary>Como usar o LibrasLive</summary>
+                    <div class="help-content">
+                        <ol>
+                            <li>Clique em "Iniciar Câmera" para ativar sua webcam</li>
+                            <li>Posicione sua mão na frente da câmera</li>
+                            <li>Faça sinais do alfabeto LIBRAS (A-Z) ou frases comuns</li>
+                            <li>A tradução aparecerá em tempo real</li>
+                            <li>Use "Repetir Som" para ouvir a tradução novamente</li>
+                        </ol>
+                        
+                        <h4>Sinais Suportados:</h4>
+                        <p><strong>Alfabeto:</strong> A, B, C, D, E, F, G, H, I, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y</p>
+                        <p><strong>Frases:</strong> Olá, Obrigado, Por favor, Desculpa, Sim, Não, Bom dia, Boa tarde, Boa noite, Tudo bem, Eu te amo, Família, Casa, Trabalho, Escola, Água, Comida, Ajuda, Tchau, Até logo</p>
+                    </div>
+                </details>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2024 LibrasLive. Desenvolvido para inclusão e acessibilidade.</p>
+        </div>
+    </footer>
+
+    <!-- Error Modal -->
+    <div id="error-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Erro</h3>
+                <button id="close-error-modal" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="error-message">Um erro ocorreu</p>
+            </div>
+            <div class="modal-footer">
+                <button id="dismiss-error" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio element for playing TTS -->
+    <audio id="tts-audio" preload="metadata"></audio>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client/dist/socket.io.min.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,180 @@
+# LibrasLive - Public Datasets Documentation
+
+Este arquivo documenta os datasets públicos utilizados para treinar os modelos de reconhecimento de LIBRAS do projeto LibrasLive.
+
+## Datasets Utilizados
+
+### 1. Sign Language MNIST Dataset (Kaggle)
+
+**Fonte:** https://www.kaggle.com/datamunge/sign-language-mnist
+**Licença:** CC BY-SA 4.0 (Creative Commons Attribution-ShareAlike 4.0)
+**Descrição:** Dataset de imagens em grayscale (28x28 pixels) representando letras do alfabeto em linguagem de sinais americana (ASL).
+
+**Adaptação para LIBRAS:**
+- O dataset original contém sinais ASL, que foram adaptados para LIBRAS brasileiro
+- Foram utilizadas apenas as letras A-Y (excluindo J e Z que requerem movimento)
+- As imagens foram processadas com MediaPipe para extrair landmarks das mãos
+- Total de 24 classes (letras do alfabeto LIBRAS estáticas)
+
+**Estrutura:**
+```
+sign_language_mnist/
+├── sign_mnist_train.csv  # 27,455 amostras de treino
+├── sign_mnist_test.csv   # 7,172 amostras de teste
+└── README.md
+```
+
+**Formato dos dados:**
+- Cada linha representa uma imagem 28x28 = 784 pixels + 1 label
+- Labels: 0-25 (A-Z, excluindo J=9 e Z=25)
+- Valores dos pixels: 0-255 (grayscale)
+
+### 2. Libras Movement Dataset (UCI)
+
+**Fonte:** https://archive.ics.uci.edu/ml/datasets/libras+movement
+**Licença:** Uso educacional e de pesquisa
+**Descrição:** Dataset com 15 classes de palavras/frases em LIBRAS representadas como sequências de coordenadas 2D das mãos.
+
+**Características:**
+- 360 instâncias (24 por classe)
+- 90 atributos (coordenadas x,y das mãos ao longo de 45 frames)
+- 15 classes de palavras em LIBRAS
+
+**Classes incluídas:**
+1. curvar (to curve)
+2. alisar (to brush)
+3. libras (sign language)
+4. livre (free)
+5. palavra (word)
+6. árvore (tree)
+7. verde (green)
+8. amarelo (yellow)
+9. tempo (time/weather)
+10. bom (good)
+11. ruim (bad)
+12. melhor (better)
+13. pior (worse)
+14. primeiro (first)
+15. último (last)
+
+**Adaptação:**
+- Dataset expandido para incluir as 20 frases mais comuns em LIBRAS
+- Sequências convertidas para 30 frames com 63 features (21 landmarks × 3 coordenadas)
+- Normalização aplicada para consistência com MediaPipe
+
+### 3. Datasets Sintéticos Gerados
+
+Devido à limitação de datasets públicos específicos para LIBRAS com landmarks MediaPipe, foram gerados datasets sintéticos para complementar o treinamento:
+
+**Alphabet Dataset Sintético:**
+- 500 amostras por classe (24 classes)
+- 12,000 amostras totais
+- Landmarks baseados em padrões característicos de cada letra
+- Ruído gaussiano adicionado para variabilidade
+
+**Phrase Dataset Sintético:**
+- 200 sequências por frase (20 frases)
+- 4,000 sequências totais
+- Movimentos temporais simulados com padrões sinusoidais
+- Amplitude e frequência específicas para cada frase
+
+## Frases LIBRAS Suportadas
+
+O sistema reconhece as seguintes 20 frases mais comuns em LIBRAS:
+
+1. **Cumprimentos e Cortesia:**
+   - OLA (Olá)
+   - OBRIGADO (Obrigado/a)
+   - POR_FAVOR (Por favor)
+   - DESCULPA (Desculpa)
+   - TCHAU (Tchau)
+   - ATE_LOGO (Até logo)
+
+2. **Respostas Básicas:**
+   - SIM (Sim)
+   - NAO (Não)
+   - TUDO_BEM (Tudo bem)
+
+3. **Saudações por Período:**
+   - BOM_DIA (Bom dia)
+   - BOA_TARDE (Boa tarde)
+   - BOA_NOITE (Boa noite)
+
+4. **Expressões Afetivas:**
+   - EU_TE_AMO (Eu te amo)
+
+5. **Substantivos Comuns:**
+   - FAMILIA (Família)
+   - CASA (Casa)
+   - TRABALHO (Trabalho)
+   - ESCOLA (Escola)
+   - AGUA (Água)
+   - COMIDA (Comida)
+
+6. **Pedido de Ajuda:**
+   - AJUDA (Ajuda)
+
+## Processamento dos Dados
+
+### Landmarks MediaPipe
+
+Todos os dados foram processados para extrair 21 pontos de landmark da mão:
+
+```
+Landmark Points (0-20):
+0: WRIST
+1: THUMB_CMC, 2: THUMB_MCP, 3: THUMB_IP, 4: THUMB_TIP
+5: INDEX_FINGER_MCP, 6: INDEX_FINGER_PIP, 7: INDEX_FINGER_DIP, 8: INDEX_FINGER_TIP
+9: MIDDLE_FINGER_MCP, 10: MIDDLE_FINGER_PIP, 11: MIDDLE_FINGER_DIP, 12: MIDDLE_FINGER_TIP
+13: RING_FINGER_MCP, 14: RING_FINGER_PIP, 15: RING_FINGER_DIP, 16: RING_FINGER_TIP
+17: PINKY_MCP, 18: PINKY_PIP, 19: PINKY_DIP, 20: PINKY_TIP
+```
+
+### Normalização
+
+- **Coordenadas:** Normalizadas usando StandardScaler (média 0, desvio padrão 1)
+- **Sequências:** Padronizadas para 30 frames
+- **Features:** 63 valores por frame (21 landmarks × 3 coordenadas xyz)
+
+## Métricas de Qualidade
+
+### Modelo de Alfabeto:
+- Acurácia esperada: >85% no conjunto de teste
+- Precisão por classe: >80% para letras comuns
+- Tempo de inferência: <50ms por predição
+
+### Modelo de Frases:
+- Acurácia esperada: >75% no conjunto de teste
+- Precisão por classe: >70% para frases comuns
+- Tempo de inferência: <100ms por sequência
+
+## Limitações dos Dados
+
+1. **Variabilidade Limitada:** Datasets sintéticos podem não capturar toda a variabilidade natural
+2. **Ausência de J e Z:** Letras que requerem movimento não são suportadas
+3. **Contexto Cultural:** Sinais podem variar regionalmente no Brasil
+4. **Qualidade da Imagem:** Performance depende da qualidade da câmera e iluminação
+
+## Recomendações para Melhoria
+
+1. **Coleta de Dados Reais:** Implementar sistema para coletar dados reais de usuários
+2. **Aumento de Dados:** Aplicar técnicas de data augmentation
+3. **Validação com Especialistas:** Validar sinais com instrutores de LIBRAS
+4. **Expansão do Vocabulário:** Adicionar mais palavras e frases conforme necessidade
+
+## Referências
+
+1. Tecgraf/PUC-Rio. (2012). Libras Movement Dataset. UCI Machine Learning Repository.
+2. Kaggle Sign Language MNIST Dataset. (2017). https://www.kaggle.com/datamunge/sign-language-mnist
+3. Google MediaPipe Hands. https://google.github.io/mediapipe/solutions/hands.html
+4. Quadros, R. M. de, & Karnopp, L. B. (2004). Língua de sinais brasileira: estudos linguísticos.
+
+## Contato
+
+Para questões sobre os datasets ou sugestões de melhorias:
+- GitHub Issues: Reporte problemas no repositório do projeto
+- Contribuições: Pull requests são bem-vindos
+
+---
+
+**Nota Legal:** Este projeto é desenvolvido para fins educacionais e de pesquisa. Os datasets utilizados respeitam as licenças originais e são devidamente creditados.
