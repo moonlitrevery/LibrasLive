@@ -385,7 +385,8 @@ Este projeto está licenciado sob a Licença MIT - veja o arquivo [LICENSE](LICE
 - **GitHub Issues**: Para bugs e solicitações de recursos
 - **Discussions**: Para perguntas gerais e discussões
 - **Email**: joao.bruschi@outlook.com.br
-
+- **LinkedIn**: [Via mensagem direta](https://www.linkedin.com/in/joaobruschi/)
+  
 ---
 
 ## 🚀 Roadmap
