@@ -379,13 +379,12 @@ Este projeto está licenciado sob a Licença MIT - veja o arquivo [LICENSE](LICE
 - **MediaPipe Team** por fornecer a solução de detecção de mãos
 - **Comunidade LIBRAS** por recursos educacionais
 - **Datasets Públicos** mencionados em `data/datasets_publicos.txt`
-- **Contribuidores** do projeto
 
 ## 📞 Suporte
 
 - **GitHub Issues**: Para bugs e solicitações de recursos
 - **Discussions**: Para perguntas gerais e discussões
-- **Email**: seu-email@exemplo.com
+- **Email**: joao.bruschi@outlook.com.br
 
 ---
 
