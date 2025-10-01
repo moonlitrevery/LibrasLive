@@ -401,7 +401,3 @@ Este projeto está licenciado sob a Licença MIT - veja o arquivo [LICENSE](LICE
 #### v1.1 - Features Avançadas
 - [ ] Detecção de duas mãos
 - [ ] Sinais com movimento (J, Z)
-
----
-
-**Desenvolvido com ❤️ para a comunidade LIBRAS**
