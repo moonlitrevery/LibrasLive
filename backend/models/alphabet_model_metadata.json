@@ -30,8 +30,8 @@
     "X",
     "Y"
   ],
-  "test_accuracy": 1.0,
-  "best_val_accuracy": 100.0,
+  "test_accuracy": 0.7109375,
+  "best_val_accuracy": 85.0,
   "total_parameters": 18008,
-  "training_samples": 8400
+  "training_samples": 221
 }

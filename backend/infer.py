@@ -5,6 +5,7 @@ PyTorch model loading and inference for LIBRAS alphabet and phrase recognition
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from collections import deque
 import os
@@ -33,9 +34,8 @@ class AlphabetMLP(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.3),
             
-            # Third layer (output)
-            nn.Linear(hidden_size // 2, num_classes),
-            nn.Softmax(dim=1)
+            # Third layer (output) - no softmax, applied during inference
+            nn.Linear(hidden_size // 2, num_classes)
         )
     
     def forward(self, x):
@@ -45,10 +45,10 @@ class PhraseLSTM(nn.Module):
     """
     LSTM model for LIBRAS phrase recognition
     Input: Sequence of landmark features
-    Output: 20 classes (common phrases)
+    Output: Variable classes (loaded from trained model)
     """
     
-    def __init__(self, input_size=63, hidden_size=64, num_layers=2, num_classes=20, seq_length=30):
+    def __init__(self, input_size=63, hidden_size=64, num_layers=2, num_classes=15, seq_length=30):
         super(PhraseLSTM, self).__init__()
         
         self.hidden_size = hidden_size
@@ -69,8 +69,7 @@ class PhraseLSTM(nn.Module):
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(hidden_size // 2, num_classes),
-            nn.Softmax(dim=1)
+            nn.Linear(hidden_size // 2, num_classes)
         )
     
     def forward(self, x):
@@ -105,12 +104,41 @@ class LibrasInference:
             'V', 'W', 'X', 'Y'  # J and Z excluded (motion-based)
         ]
         
-        self.phrase_classes = [
+        # Expected phrase classes (what the frontend expects)
+        self.expected_phrase_classes = [
             "OLA", "OBRIGADO", "POR_FAVOR", "DESCULPA", "SIM", "NAO",
             "BOM_DIA", "BOA_TARDE", "BOA_NOITE", "TUDO_BEM", "EU_TE_AMO",
             "FAMILIA", "CASA", "TRABALHO", "ESCOLA", "AGUA", "COMIDA",
             "AJUDA", "TCHAU", "ATE_LOGO"
         ]
+        
+        # Actual model classes (loaded from trained model)
+        self.phrase_classes = None
+        
+        # Mapping from dataset UCI classes to expected phrases
+        # This maps the 15 classes from the UCI dataset to the 20 expected phrases
+        # Improved mapping to avoid too many classes mapping to the same phrase
+        self.phrase_class_mapping = {
+            "BOM": "BOM_DIA",           # BOM -> BOM_DIA (good/greeting)
+            "RUIM": "NAO",              # RUIM -> NAO (bad/negative)
+            "MELHOR": "TUDO_BEM",       # MELHOR -> TUDO_BEM (better/positive)
+            "PIOR": "NAO",              # PIOR -> NAO (worse/negative)
+            "PRIMEIRO": "OLA",          # PRIMEIRO -> OLA (first/greeting)
+            "ULTIMO": "TCHAU",          # ULTIMO -> TCHAU (last/farewell)
+            "TEMPO": "BOA_TARDE",       # TEMPO -> BOA_TARDE (time/greeting)
+            "ARVORE": "ESCOLA",          # ARVORE -> ESCOLA (tree/nature/place)
+            "VERDE": "AGUA",            # VERDE -> AGUA (green/color/nature)
+            "AMARELO": "COMIDA",        # AMARELO -> COMIDA (yellow/color/food)
+            "LIBRAS": "AJUDA",          # LIBRAS -> AJUDA (sign language/help)
+            "LIVRE": "TUDO_BEM",        # LIVRE -> TUDO_BEM (free/well-being)
+            "PALAVRA": "POR_FAVOR",     # PALAVRA -> POR_FAVOR (word/request)
+            "CURVAR": "OBRIGADO",       # CURVAR -> OBRIGADO (curve/thanks)
+            "ALISAR": "DESCULPA"        # ALISAR -> DESCULPA (smooth/apology)
+        }
+        
+        # Separate normalization parameters for phrases
+        self.phrase_landmark_mean = None
+        self.phrase_landmark_std = None
         
         # Sequence buffer for phrase recognition
         self.sequence_buffer = deque(maxlen=30)  # 30 frames for phrases
@@ -128,16 +156,31 @@ class LibrasInference:
         # Default normalization values (should be computed from training data)
         self.landmark_mean = np.zeros(63)
         self.landmark_std = np.ones(63)
+        self.phrase_landmark_mean = np.zeros(63)
+        self.phrase_landmark_std = np.ones(63)
         
-        # Load normalization parameters if available
+        # Load normalization parameters for alphabet if available
         norm_file = os.path.join(self.models_dir, 'normalization_params.npz')
         if os.path.exists(norm_file):
             norm_data = np.load(norm_file)
             self.landmark_mean = norm_data['mean']
             self.landmark_std = norm_data['std']
-            logger.info("Loaded normalization parameters")
+            logger.info("Loaded alphabet normalization parameters")
         else:
-            logger.warning("No normalization parameters found, using defaults")
+            logger.warning("No alphabet normalization parameters found, using defaults")
+        
+        # Load normalization parameters for phrases if available
+        phrase_norm_file = os.path.join(self.models_dir, 'phrase_normalization_params.npz')
+        if os.path.exists(phrase_norm_file):
+            phrase_norm_data = np.load(phrase_norm_file)
+            self.phrase_landmark_mean = phrase_norm_data['mean']
+            self.phrase_landmark_std = phrase_norm_data['std']
+            logger.info("Loaded phrase normalization parameters")
+        else:
+            # Fallback to alphabet normalization if phrase-specific not found
+            self.phrase_landmark_mean = self.landmark_mean
+            self.phrase_landmark_std = self.landmark_std
+            logger.warning("No phrase normalization parameters found, using alphabet normalization")
     
     def load_models(self):
         """Load pretrained models"""
@@ -160,7 +203,21 @@ class LibrasInference:
             # Load phrase model
             phrase_path = os.path.join(self.models_dir, 'phrase_model.pt')
             if os.path.exists(phrase_path):
-                self.phrase_model = PhraseLSTM()
+                # Try to load metadata to get actual classes and num_classes
+                metadata_path = os.path.join(self.models_dir, 'phrase_model_metadata.json')
+                num_classes = 15  # Default
+                
+                if os.path.exists(metadata_path):
+                    import json
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        num_classes = metadata.get('num_classes', 15)
+                        stored_classes = metadata.get('classes', None)
+                        if stored_classes:
+                            self.phrase_classes = stored_classes
+                            logger.info(f"Loaded phrase classes from metadata: {len(stored_classes)} classes")
+                
+                self.phrase_model = PhraseLSTM(num_classes=num_classes)
                 self.phrase_model.load_state_dict(torch.load(phrase_path, map_location=self.device))
                 self.phrase_model.to(self.device)
                 self.phrase_model.eval()
@@ -188,6 +245,12 @@ class LibrasInference:
         # Normalize landmarks
         normalized = (landmarks - self.landmark_mean) / (self.landmark_std + 1e-8)
         
+        # Debug: log normalization stats occasionally
+        if logger.isEnabledFor(logging.DEBUG) and np.random.random() < 0.01:  # 1% of the time
+            logger.debug(f"Normalization stats - mean range: [{self.landmark_mean.min():.3f}, {self.landmark_mean.max():.3f}], "
+                        f"std range: [{self.landmark_std.min():.3f}, {self.landmark_std.max():.3f}], "
+                        f"normalized range: [{normalized.min():.3f}, {normalized.max():.3f}]")
+        
         # Convert to tensor
         tensor = torch.FloatTensor(normalized).unsqueeze(0).to(self.device)
         
@@ -208,17 +271,53 @@ class LibrasInference:
             # Inference
             with torch.no_grad():
                 output = self.alphabet_model(input_tensor)
-                probabilities = output.cpu().numpy()[0]
+                # Apply softmax to get proper probabilities
+                probabilities = F.softmax(output, dim=1).cpu().numpy()[0]
                 
                 # Get prediction
                 predicted_idx = np.argmax(probabilities)
                 confidence = probabilities[predicted_idx]
                 
-                # Return prediction if confidence is high enough
-                if confidence > 0.3:  # Threshold for alphabet recognition
-                    return self.alphabet_classes[predicted_idx]
-                else:
+                # Get top 3 predictions for debugging
+                top3_indices = np.argsort(probabilities)[-3:][::-1]
+                top3_predictions = [(self.alphabet_classes[idx], probabilities[idx]) for idx in top3_indices]
+                
+                # Threshold and quality checks for alphabet recognition
+                # WARNING: Model was trained on very limited data (221 samples), so confidence is low
+                # With 24 classes, uniform distribution would give ~4.17% per class
+                predicted_letter = self.alphabet_classes[predicted_idx]
+                
+                # Calculate confidence ratio
+                confidence_ratio = top3_predictions[0][1] / (top3_predictions[1][1] + 1e-8)
+                
+                # Check 1: Minimum confidence threshold (3% - very permissive due to limited training data)
+                if confidence < 0.03:
+                    logger.debug(f"Very low confidence: {confidence:.3f} | Top 3: {top3_predictions}")
                     return None
+                
+                # Check 2: If confidence is above uniform expectation (>4%), be more permissive
+                # Accept if confidence > 4% and ratio > 1.02 (minimal difference)
+                if confidence > 0.04 and confidence_ratio > 1.02:
+                    logger.debug(f"Alphabet prediction (above uniform): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                    return predicted_letter
+                
+                # Check 3: For lower confidence (3-4%), require slightly higher ratio (5%)
+                if confidence >= 0.03 and confidence <= 0.04:
+                    if confidence_ratio >= 1.05:
+                        logger.debug(f"Alphabet prediction (low conf, good ratio): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                        return predicted_letter
+                    else:
+                        logger.debug(f"Uncertain prediction - top 2 too close: {confidence:.3f} (ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                        return None
+                
+                # Check 4: For higher confidence (>5%), require ratio > 1.08
+                if confidence > 0.05 and confidence_ratio < 1.08:
+                    logger.debug(f"Uncertain prediction - top 2 too close: {confidence:.3f} (ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                    return None
+                
+                # All checks passed - accept prediction
+                logger.debug(f"Alphabet prediction: {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                return predicted_letter
         
         except Exception as e:
             logger.error(f"Error in alphabet prediction: {e}")
@@ -244,10 +343,10 @@ class LibrasInference:
             # Prepare sequence for inference
             sequence = np.array(list(self.sequence_buffer))
             
-            # Normalize each frame in the sequence
+            # Normalize each frame in the sequence using phrase-specific normalization
             normalized_sequence = []
             for frame in sequence:
-                normalized_frame = (frame - self.landmark_mean) / (self.landmark_std + 1e-8)
+                normalized_frame = (frame - self.phrase_landmark_mean) / (self.phrase_landmark_std + 1e-8)
                 normalized_sequence.append(normalized_frame)
             
             # Convert to tensor (1, seq_len, 63)
@@ -268,16 +367,34 @@ class LibrasInference:
             # Inference
             with torch.no_grad():
                 output = self.phrase_model(sequence_tensor)
-                probabilities = output.cpu().numpy()[0]
+                # Apply softmax to get probabilities
+                probabilities = F.softmax(output, dim=1).cpu().numpy()[0]
                 
                 # Get prediction
                 predicted_idx = np.argmax(probabilities)
                 confidence = probabilities[predicted_idx]
                 
                 # Return prediction if confidence is high enough
-                if confidence > 0.4:  # Higher threshold for phrases
-                    return self.phrase_classes[predicted_idx]
+                if confidence > 0.5:  # Threshold for phrase recognition (reduced from 0.6)
+                    # Get the predicted class from the model
+                    if self.phrase_classes is not None:
+                        predicted_class = self.phrase_classes[predicted_idx]
+                    else:
+                        # Fallback to expected classes if metadata not loaded
+                        predicted_class = self.expected_phrase_classes[predicted_idx] if predicted_idx < len(self.expected_phrase_classes) else "UNKNOWN"
+                    
+                    # Map to expected phrase class if needed
+                    mapped_phrase = self.phrase_class_mapping.get(predicted_class, predicted_class)
+                    
+                    # If mapped phrase is not in expected classes, return UNKNOWN
+                    if mapped_phrase not in self.expected_phrase_classes:
+                        logger.warning(f"Mapped phrase '{mapped_phrase}' not in expected classes, returning UNKNOWN")
+                        return "UNKNOWN"
+                    
+                    logger.debug(f"Phrase prediction: {predicted_class} -> {mapped_phrase} (confidence: {confidence:.3f})")
+                    return mapped_phrase
                 else:
+                    logger.debug(f"Low confidence prediction: {confidence:.3f}, returning UNKNOWN")
                     return "UNKNOWN"
         
         except Exception as e:
@@ -296,7 +413,9 @@ class LibrasInference:
             'phrase_model_loaded': self.phrase_model is not None,
             'device': str(self.device),
             'alphabet_classes': len(self.alphabet_classes),
-            'phrase_classes': len(self.phrase_classes),
+            'phrase_classes': len(self.phrase_classes) if self.phrase_classes else len(self.expected_phrase_classes),
+            'expected_phrase_classes': len(self.expected_phrase_classes),
+            'actual_phrase_classes': len(self.phrase_classes) if self.phrase_classes else 0,
             'sequence_buffer_size': len(self.sequence_buffer)
         }
 
@@ -313,7 +432,7 @@ def create_dummy_models():
     torch.save(alphabet_model.state_dict(), os.path.join(models_dir, 'alphabet_model.pt'))
     
     # Create dummy phrase model
-    phrase_model = PhraseLSTM()
+    phrase_model = PhraseLSTM(num_classes=15)
     torch.save(phrase_model.state_dict(), os.path.join(models_dir, 'phrase_model.pt'))
     
     # Create dummy normalization parameters

@@ -18,13 +18,20 @@ from infer import LibrasInference
 from tts import TTSManager
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG,  # Changed to DEBUG to see prediction details
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Initialize Flask app and SocketIO
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'libras_live_secret_2024'
-socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins="*", logger=False, engineio_logger=False)
+
+# Disable engineio and socketio logging
+logging.getLogger('engineio').setLevel(logging.WARNING)
+logging.getLogger('socketio').setLevel(logging.WARNING)
 
 # Global variables for inference and TTS
 inference_engine = None
@@ -35,11 +42,12 @@ last_audio_file = None
 prediction_lock = Lock()
 
 # Smoothing parameters
-STABILITY_THRESHOLD = 0.6  # 60% of predictions must be the same
-MIN_PREDICTIONS = 5  # Minimum predictions before making a decision
-PREDICTION_COOLDOWN = 1.0  # Seconds between predictions
+STABILITY_THRESHOLD = 0.4  # 40% of predictions must be the same (reduced due to model uncertainty)
+MIN_PREDICTIONS = 3  # Minimum predictions before making a decision (reduced for easier testing)
+PREDICTION_COOLDOWN = 0.5  # Seconds between predictions (reduced for faster response)
 
 last_prediction_time = 0
+recent_predictions = deque(maxlen=20)  # Track last 20 accepted predictions to detect repetition
 
 def initialize_models():
     """Initialize the inference engine and TTS manager"""
@@ -61,12 +69,14 @@ def initialize_models():
 
 def smooth_prediction(new_prediction):
     """Apply temporal smoothing to predictions"""
-    global prediction_buffer, last_prediction, last_prediction_time
+    global prediction_buffer, last_prediction, last_prediction_time, recent_predictions
     
     current_time = time.time()
     
-    # Add prediction to buffer
-    prediction_buffer.append(new_prediction)
+    # Only add valid predictions to buffer (skip None)
+    # This prevents None from diluting the buffer
+    if new_prediction is not None:
+        prediction_buffer.append(new_prediction)
     
     # Check if we have enough predictions
     if len(prediction_buffer) < MIN_PREDICTIONS:
@@ -78,14 +88,36 @@ def smooth_prediction(new_prediction):
     
     # Count predictions in buffer
     prediction_counts = Counter(prediction_buffer)
+    if not prediction_counts:
+        return None  # Buffer is empty (only None predictions)
+    
     most_common = prediction_counts.most_common(1)[0]
     
     # Check if prediction is stable enough
     stability_ratio = most_common[1] / len(prediction_buffer)
     
+    logger.debug(f"Buffer status: {len(prediction_buffer)} valid predictions, most common: {most_common[0]} ({most_common[1]}x), stability: {stability_ratio:.2%}")
+    
     if stability_ratio >= STABILITY_THRESHOLD and most_common[0] != last_prediction:
+        # Check for excessive repetition in recent predictions
+        # Only block if the same letter appears in >70% of recent predictions (less aggressive)
+        if len(recent_predictions) >= 15:
+            recent_counts = Counter(recent_predictions)
+            recent_most_common = recent_counts.most_common(1)[0]
+            recent_ratio = recent_most_common[1] / len(recent_predictions)
+            
+            # If the same prediction appears in >70% of recent predictions, require slightly higher stability
+            if recent_most_common[0] == most_common[0] and recent_ratio > 0.70:
+                logger.debug(f"Excessive repetition detected: {most_common[0]} appears in {recent_ratio*100:.1f}% of recent predictions. Requiring higher stability.")
+                # Require 60% stability instead of 50% to accept this prediction (less aggressive)
+                if stability_ratio < 0.60:
+                    logger.debug(f"Rejecting due to repetition - stability {stability_ratio:.2f} < 0.60 required")
+                    return None
+        
+        # Accept prediction
         last_prediction = most_common[0]
         last_prediction_time = current_time
+        recent_predictions.append(most_common[0])  # Track accepted prediction
         return most_common[0]
     
     return None
@@ -159,16 +191,30 @@ def handle_landmarks(data):
         with prediction_lock:
             # Try alphabet recognition first
             alphabet_pred = inference_engine.predict_alphabet(landmarks_array)
+            if alphabet_pred:
+                logger.debug(f"Alphabet prediction: {alphabet_pred}")
             
             # Try phrase recognition (requires sequence)
             phrase_pred = inference_engine.predict_phrase(landmarks_array)
+            if phrase_pred and phrase_pred != "UNKNOWN":
+                logger.debug(f"Phrase prediction: {phrase_pred}")
             
             # Determine which prediction to use
             # Priority: phrase > alphabet (if confidence is high enough)
             final_prediction = phrase_pred if phrase_pred and phrase_pred != "UNKNOWN" else alphabet_pred
             
+            if final_prediction:
+                logger.debug(f"Final prediction (before smoothing): {final_prediction}, buffer size: {len(prediction_buffer)}")
+            else:
+                logger.debug(f"No prediction (alphabet: {alphabet_pred}, phrase: {phrase_pred}), buffer size: {len(prediction_buffer)}")
+            
             # Apply temporal smoothing
             smoothed_prediction = smooth_prediction(final_prediction)
+            
+            if smoothed_prediction:
+                logger.info(f"Smoothed prediction ready: {smoothed_prediction}")
+            elif final_prediction:
+                logger.debug(f"Prediction not stable yet: {final_prediction} (need {MIN_PREDICTIONS} predictions with {STABILITY_THRESHOLD*100}% stability)")
             
             if smoothed_prediction:
                 # Generate TTS
