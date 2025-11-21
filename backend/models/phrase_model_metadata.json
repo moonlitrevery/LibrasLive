@@ -3,9 +3,9 @@
   "num_classes": 15,
   "feature_size": 63,
   "sequence_length": 30,
-  "hidden_size": 64,
-  "num_layers": 2,
-  "dropout_rate": 0.3,
+  "hidden_size": 128,
+  "num_layers": 3,
+  "dropout_rate": 0.4,
   "classes": [
     "CURVAR",
     "ALISAR",
@@ -24,8 +24,9 @@
     "ULTIMO"
   ],
   "test_accuracy": 0.8444444444444444,
-  "best_val_accuracy": 86.66666666666667,
-  "total_parameters": 68879,
+  "best_val_accuracy": 88.88888888888889,
+  "total_parameters": 430607,
   "training_sequences": 270,
-  "sequence_format": "(batch, seq_length, features)"
+  "sequence_format": "(batch, seq_length, features)",
+  "architecture": "LSTM with BatchNorm and improved classifier"
 }

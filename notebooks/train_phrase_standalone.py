@@ -1,13 +1,21 @@
 #!/usr/bin/env python
 """
-Script standalone para treinar o modelo de frases LIBRAS.
-Use este script se o Jupyter notebook estiver com problemas de DLL.
+Script standalone melhorado para treinar o modelo de frases LIBRAS.
+
+Melhorias:
+- Arquitetura LSTM melhorada com BatchNorm
+- Data augmentation para sequências
+- Learning rate schedule melhor
+- Regularização aprimorada
+- Early stopping inteligente
+
 Execute: python notebooks/train_phrase_standalone.py
 """
 
 import os
 import sys
 import json
+import random
 
 # Configurações de compatibilidade ANTES de importar torch
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
@@ -28,7 +36,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 print("=" * 70)
-print("TREINAMENTO DO MODELO DE FRASES LIBRAS")
+print("TREINAMENTO MELHORADO DO MODELO DE FRASES LIBRAS")
 print("=" * 70)
 print()
 
@@ -42,11 +50,12 @@ PHRASE_CLASSES = [
 NUM_CLASSES = len(PHRASE_CLASSES)
 FEATURE_SIZE = 63
 SEQUENCE_LENGTH = 30
-BATCH_SIZE = 16
+BATCH_SIZE = 32  # Aumentado
 LEARNING_RATE = 0.001
-NUM_EPOCHS = 150
-PATIENCE = 20
+NUM_EPOCHS = 200  # Mais épocas
+PATIENCE = 25  # Mais paciência
 GRAD_CLIP = 1.0
+WEIGHT_DECAY = 1e-4
 
 # Carregar dataset
 print("Carregando dataset de frases...")
@@ -80,55 +89,78 @@ print(f"  Validação: {X_val.shape[0]}, Teste: {X_test.shape[0]}")
 print(f"  Formato: (batch, {SEQUENCE_LENGTH} frames, {FEATURE_SIZE} features)")
 print()
 
-# Dataset class
+# Data augmentation para sequências
+def augment_sequence(sequence, noise_factor=0.02):
+    """Adiciona ruído gaussiano à sequência."""
+    noise = np.random.normal(0, noise_factor, sequence.shape).astype(np.float32)
+    return sequence + noise
+
+# Dataset class com augmentation
 class LibrasPhraseDataset(Dataset):
-    def __init__(self, X, y):
+    def __init__(self, X, y, augment=False):
         self.X = torch.FloatTensor(X)
         self.y = torch.LongTensor(y)
+        self.augment = augment
     
     def __len__(self):
         return len(self.X)
     
     def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
+        x = self.X[idx].clone()
+        
+        if self.augment and random.random() > 0.5:
+            # Aplicar augmentation
+            x_np = x.numpy()
+            x_aug = augment_sequence(x_np, noise_factor=0.02)
+            x = torch.FloatTensor(x_aug)
+        
+        return x, self.y[idx]
 
 # Criar datasets
-train_dataset = LibrasPhraseDataset(X_train, y_train)
-val_dataset = LibrasPhraseDataset(X_val, y_val)
-test_dataset = LibrasPhraseDataset(X_test, y_test)
+train_dataset = LibrasPhraseDataset(X_train, y_train, augment=True)
+val_dataset = LibrasPhraseDataset(X_val, y_val, augment=False)
+test_dataset = LibrasPhraseDataset(X_test, y_test, augment=False)
 
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
 
 print(f"✓ Data loaders criados: {len(train_loader)} batches de treino")
 print()
 
-# Modelo LSTM
+# Modelo LSTM melhorado
 class PhraseLSTM(nn.Module):
-    def __init__(self, input_size=63, hidden_size=64, num_layers=2, 
-                 num_classes=20, seq_length=30, dropout_rate=0.3):
+    def __init__(self, input_size=63, hidden_size=128, num_layers=3, 
+                 num_classes=20, seq_length=30, dropout_rate=0.4):
         super(PhraseLSTM, self).__init__()
         
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.seq_length = seq_length
         
-        # LSTM layers
+        # Input projection
+        self.input_proj = nn.Linear(input_size, hidden_size)
+        
+        # LSTM layers melhoradas
         self.lstm = nn.LSTM(
-            input_size=input_size,
+            input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
-            dropout=0.2 if num_layers > 1 else 0,
+            dropout=0.3 if num_layers > 1 else 0,
             bidirectional=False
         )
         
-        # Classification head
+        # Classification head melhorado
         self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
+            nn.Linear(hidden_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.BatchNorm1d(hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate * 0.5),
             nn.Linear(hidden_size // 2, num_classes)
         )
         
@@ -152,12 +184,17 @@ class PhraseLSTM(nn.Module):
         # x shape: (batch_size, seq_length, input_size)
         batch_size = x.size(0)
         
+        # Input projection (reshape para aplicar linear, depois reshape de volta)
+        x_flat = x.reshape(-1, x.size(-1))
+        x_proj_flat = self.input_proj(x_flat)
+        x_proj = x_proj_flat.reshape(batch_size, self.seq_length, -1)
+        
         # Initialize hidden state
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(x.device)
         c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(x.device)
         
         # Forward propagate LSTM
-        lstm_out, (h_n, c_n) = self.lstm(x, (h0, c0))
+        lstm_out, (h_n, c_n) = self.lstm(x_proj, (h0, c0))
         
         # Use the last output for classification
         last_output = lstm_out[:, -1, :]
@@ -172,22 +209,26 @@ print(f"✓ Usando dispositivo: {device}")
 
 model = PhraseLSTM(
     input_size=FEATURE_SIZE,
-    hidden_size=64,
-    num_layers=2,
+    hidden_size=128,  # Aumentado
+    num_layers=3,  # Mais camadas
     num_classes=NUM_CLASSES,
     seq_length=SEQUENCE_LENGTH,
-    dropout_rate=0.3
+    dropout_rate=0.4  # Aumentado
 ).to(device)
 
 total_params = sum(p.numel() for p in model.parameters())
 print(f"✓ Modelo LSTM criado: {total_params:,} parâmetros")
 print()
 
-# Treinamento
+# Treinamento melhorado
 criterion = nn.CrossEntropyLoss()
 params = list(model.parameters())
-optimizer = optim.Adam(params, lr=LEARNING_RATE, weight_decay=1e-5)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, patience=10)
+optimizer = optim.Adam(params, lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+
+# Learning rate scheduler melhorado
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6
+)
 
 def train_epoch(model, train_loader, criterion, optimizer, device, grad_clip=None):
     model.train()
@@ -292,49 +333,60 @@ test_accuracy = accuracy_score(all_targets, all_preds)
 print(f"✓ Acurácia no teste: {test_accuracy*100:.2f}%")
 print()
 
-# Classification report
+# Classification report (usar apenas classes presentes)
+unique_classes = sorted(set(all_targets))
+present_class_names = [PHRASE_CLASSES[i] if i < len(PHRASE_CLASSES) else f"Class_{i}" for i in unique_classes]
+
 print("Relatório de classificação:")
-print(classification_report(all_targets, all_preds, target_names=PHRASE_CLASSES))
+try:
+    print(classification_report(all_targets, all_preds, labels=unique_classes, target_names=present_class_names))
+except Exception as e:
+    print(f"⚠ Erro ao gerar relatório detalhado: {e}")
+    print(f"Classes presentes: {len(unique_classes)}")
 print()
 
 # Salvar modelo
 print("Salvando modelo...")
-models_dir = os.path.join(ROOT_DIR, 'backend/models')
-os.makedirs(models_dir, exist_ok=True)
+try:
+    models_dir = os.path.join(ROOT_DIR, 'backend/models')
+    os.makedirs(models_dir, exist_ok=True)
 
-model_path = os.path.join(models_dir, 'phrase_model.pt')
-torch.save(model.state_dict(), model_path)
-print(f"✓ Modelo salvo em: {model_path}")
+    model_path = os.path.join(models_dir, 'phrase_model.pt')
+    torch.save(model.state_dict(), model_path)
+    print(f"✓ Modelo salvo em: {model_path}")
 
-norm_path = os.path.join(models_dir, 'phrase_normalization_params.npz')
-np.savez(norm_path, mean=mean_params, std=std_params)
-print(f"✓ Parâmetros de normalização salvos em: {norm_path}")
+    norm_path = os.path.join(models_dir, 'phrase_normalization_params.npz')
+    np.savez(norm_path, mean=mean_params, std=std_params)
+    print(f"✓ Parâmetros de normalização salvos em: {norm_path}")
 
-# Salvar metadata
-metadata = {
-    'model_type': 'PhraseLSTM',
-    'num_classes': NUM_CLASSES,
-    'feature_size': FEATURE_SIZE,
-    'sequence_length': SEQUENCE_LENGTH,
-    'hidden_size': 64,
-    'num_layers': 2,
-    'dropout_rate': 0.3,
-    'classes': PHRASE_CLASSES,
-    'test_accuracy': float(test_accuracy),
-    'best_val_accuracy': float(best_val_accuracy),
-    'total_parameters': int(total_params),
-    'training_sequences': int(len(X_train)),
-    'sequence_format': '(batch, seq_length, features)'
-}
+    # Salvar metadata
+    metadata = {
+        'model_type': 'PhraseLSTM',
+        'num_classes': NUM_CLASSES,
+        'feature_size': FEATURE_SIZE,
+        'sequence_length': SEQUENCE_LENGTH,
+        'hidden_size': 128,
+        'num_layers': 3,
+        'dropout_rate': 0.4,
+        'classes': PHRASE_CLASSES,
+        'test_accuracy': float(test_accuracy),
+        'best_val_accuracy': float(best_val_accuracy),
+        'total_parameters': int(total_params),
+        'training_sequences': int(len(X_train)),
+        'sequence_format': '(batch, seq_length, features)',
+        'architecture': 'LSTM with BatchNorm and improved classifier'
+    }
 
-metadata_path = os.path.join(models_dir, 'phrase_model_metadata.json')
-with open(metadata_path, 'w', encoding='utf-8') as f:
-    json.dump(metadata, f, indent=2, ensure_ascii=False)
+    metadata_path = os.path.join(models_dir, 'phrase_model_metadata.json')
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-print(f"✓ Metadata do modelo salva em: {metadata_path}")
+    print(f"✓ Metadata do modelo salva em: {metadata_path}")
+except Exception as e:
+    print(f"✗ ERRO ao salvar modelo: {e}")
+    raise
 
 print()
 print("=" * 70)
 print("✓ TREINAMENTO DO MODELO DE FRASES CONCLUÍDO COM SUCESSO!")
 print("=" * 70)
-

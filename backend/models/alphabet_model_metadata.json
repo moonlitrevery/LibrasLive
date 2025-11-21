@@ -2,8 +2,8 @@
   "model_type": "AlphabetMLP",
   "num_classes": 24,
   "feature_size": 63,
-  "hidden_size": 128,
-  "dropout_rate": 0.3,
+  "hidden_size": 256,
+  "dropout_rate": 0.4,
   "classes": [
     "A",
     "B",
@@ -30,8 +30,9 @@
     "X",
     "Y"
   ],
-  "test_accuracy": 0.7109375,
-  "best_val_accuracy": 85.0,
-  "total_parameters": 18008,
-  "training_samples": 221
+  "test_accuracy": 0.996328029375765,
+  "best_val_accuracy": 99.32680538555691,
+  "total_parameters": 126296,
+  "training_samples": 4900,
+  "architecture": "MLP with BatchNorm and 4 hidden layers"
 }

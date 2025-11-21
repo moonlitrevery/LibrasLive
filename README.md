@@ -389,16 +389,160 @@ Este projeto está licenciado sob a Licença MIT - veja o arquivo [LICENSE](LICE
   
 ---
 
-## 🚀 Roadmap
+# 📚 Guia Rápido - Datasets LIBRAS
 
-### Versão Atual (v1.0)
-- [x] Reconhecimento básico de alfabeto e frases
-- [x] Interface web responsiva
-- [x] TTS integrado
-- [x] Métricas em tempo real
+## 🚀 Como Usar (Super Simples)
 
-### Próximas Versões
+### 1. Organize suas imagens
 
-#### v1.1 - Features Avançadas
-- [ ] Detecção de duas mãos
-- [ ] Sinais com movimento (J, Z)
+Coloque suas imagens assim:
+
+```
+data/raw/custom_images/
+├── A/
+│   ├── image1.png
+│   ├── image2.png
+│   └── ...
+├── B/
+│   ├── image1.png
+│   └── ...
+└── ...
+```
+
+### 2. Execute o script
+
+```bash
+python data/setup.py
+```
+
+Pronto! O script vai:
+- ✅ Processar todas as imagens
+- ✅ Extrair landmarks com MediaPipe
+- ✅ Combinar com dataset existente
+- ✅ Gerar dataset final para treinamento
+
+### 3. Treine o modelo
+
+```bash
+python notebooks/train_alphabet_standalone.py
+```
+
+---
+
+## 📥 Onde Conseguir Datasets Públicos?
+
+### Kaggle (Recomendado)
+
+1. **Sign Language MNIST**
+   - Link: https://www.kaggle.com/datasets/datamunge/sign-language-mnist
+   - Já está no projeto!
+
+2. **Hand Gesture Recognition**
+   - Link: https://www.kaggle.com/datasets/kuchhbhi/hand-gesture-recognition-dataset
+   - Baixe e organize por classe
+
+3. **Sign Language Digits**
+   - Link: https://www.kaggle.com/datasets/ardamavi/sign-language-digits-dataset
+
+### Como Baixar do Kaggle
+
+**Opção 1: Manual**
+1. Acesse o dataset no Kaggle
+2. Clique em "Download"
+3. Extraia o ZIP
+4. Organize as imagens em `data/raw/custom_images/[LETRA]/`
+
+**Opção 2: API do Kaggle**
+```bash
+# Instalar
+pip install kaggle
+
+# Configurar (obter token em kaggle.com/settings)
+# Colocar em: ~/.kaggle/kaggle.json
+
+# Baixar
+kaggle datasets download -d datamunge/sign-language-mnist
+```
+
+---
+
+## 📁 Estrutura de Pastas
+
+```
+data/
+├── raw/                    # Dados brutos
+│   └── custom_images/      # Suas imagens aqui
+│       ├── A/
+│       ├── B/
+│       └── ...
+├── processed/              # Dados processados (gerado automaticamente)
+│   ├── alphabet_dataset.npz
+│   └── ...
+└── setup.py                # Script principal
+```
+
+---
+
+## ⚙️ Scripts Disponíveis
+
+### `setup.py` (Recomendado)
+Script master que faz tudo:
+```bash
+python data/setup.py
+```
+
+### `process_datasets.py`
+Apenas processa datasets:
+```bash
+python data/process_datasets.py
+```
+
+### `download_public_datasets.py`
+Informações sobre datasets públicos:
+```bash
+python data/download_public_datasets.py
+```
+
+---
+
+## 💡 Dicas
+
+1. **Mais dados = Melhor acurácia**
+   - Tente ter pelo menos 50-100 imagens por classe
+
+2. **Qualidade importa**
+   - Imagens claras com mãos bem visíveis funcionam melhor
+
+3. **Organização**
+   - Mantenha as imagens organizadas por classe (A/, B/, C/, etc.)
+
+4. **Formatos suportados**
+   - PNG, JPG, JPEG, BMP
+
+---
+
+## ❓ Problemas Comuns
+
+**"Nenhum dataset encontrado"**
+- Verifique se as imagens estão em `data/raw/custom_images/[LETRA]/`
+- Verifique se os nomes das pastas são letras (A, B, C, etc.)
+
+**"MediaPipe não detecta mãos"**
+- Verifique qualidade das imagens
+- Certifique-se de que as mãos estão bem visíveis
+- Tente imagens com fundo simples
+
+**"Dataset muito pequeno"**
+- Baixe mais datasets do Kaggle
+- Use data augmentation (rotação, escala, etc.)
+
+---
+
+## 📊 Resultados Esperados
+
+Com datasets adicionais, você deve ver:
+- ✅ Mais de 1000 amostras (idealmente 2000+)
+- ✅ Acurácia > 85% no teste
+- ✅ Melhor distinção entre sinais similares
+
+---

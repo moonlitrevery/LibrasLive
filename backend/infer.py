@@ -15,27 +15,41 @@ logger = logging.getLogger(__name__)
 
 class AlphabetMLP(nn.Module):
     """
-    3-layer MLP for LIBRAS alphabet recognition
+    Improved MLP for LIBRAS alphabet recognition with BatchNorm and 4 hidden layers
     Input: 63 features (21 landmarks * 3 coordinates)
-    Output: 26 classes (A-Z, excluding J and Z motion-based signs)
+    Output: 24 classes (A-Z, excluding J and Z motion-based signs)
     """
     
-    def __init__(self, input_size=63, hidden_size=128, num_classes=24):
+    def __init__(self, input_size=63, hidden_size=256, num_classes=24, dropout_rate=0.4):
         super(AlphabetMLP, self).__init__()
         
         self.layers = nn.Sequential(
             # First layer
             nn.Linear(input_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout_rate),
             
             # Second layer
-            nn.Linear(hidden_size, hidden_size // 2),
+            nn.Linear(hidden_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout_rate),
             
-            # Third layer (output) - no softmax, applied during inference
-            nn.Linear(hidden_size // 2, num_classes)
+            # Third layer (intermediate)
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.BatchNorm1d(hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate * 0.5),
+            
+            # Fourth layer
+            nn.Linear(hidden_size // 2, hidden_size // 4),
+            nn.BatchNorm1d(hidden_size // 4),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            
+            # Output layer - no softmax, applied during inference
+            nn.Linear(hidden_size // 4, num_classes)
         )
     
     def forward(self, x):
@@ -43,38 +57,75 @@ class AlphabetMLP(nn.Module):
 
 class PhraseLSTM(nn.Module):
     """
-    LSTM model for LIBRAS phrase recognition
+    Improved LSTM model for LIBRAS phrase recognition with input projection and BatchNorm
     Input: Sequence of landmark features
     Output: Variable classes (loaded from trained model)
     """
     
-    def __init__(self, input_size=63, hidden_size=64, num_layers=2, num_classes=15, seq_length=30):
+    def __init__(self, input_size=63, hidden_size=128, num_layers=3, num_classes=15, seq_length=30, dropout_rate=0.4):
         super(PhraseLSTM, self).__init__()
         
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.seq_length = seq_length
         
+        # Input projection layer
+        self.input_proj = nn.Linear(input_size, hidden_size)
+        
         # LSTM layers
         self.lstm = nn.LSTM(
-            input_size=input_size,
+            input_size=hidden_size,  # Input size is now hidden_size from projection
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
-            dropout=0.2 if num_layers > 1 else 0
+            dropout=0.3 if num_layers > 1 else 0,
+            bidirectional=False
         )
         
-        # Classification head
+        # Classification head with BatchNorm
         self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
+            nn.Linear(hidden_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.BatchNorm1d(hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate * 0.5),
             nn.Linear(hidden_size // 2, num_classes)
         )
+        
+        # Initialize weights
+        self.init_weights()
+    
+    def init_weights(self):
+        """Initialize LSTM weights"""
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param.data)
+            elif 'bias' in name:
+                param.data.fill_(0)
+                # Set forget gate bias to 1
+                n = param.size(0)
+                param.data[(n//4):(n//2)].fill_(1)
     
     def forward(self, x):
         # x shape: (batch_size, seq_length, input_size)
-        lstm_out, (h_n, c_n) = self.lstm(x)
+        batch_size = x.size(0)
+        
+        # Input projection (reshape para aplicar linear, depois reshape de volta)
+        x_flat = x.reshape(-1, x.size(-1))
+        x_proj_flat = self.input_proj(x_flat)
+        x_proj = x_proj_flat.reshape(batch_size, self.seq_length, -1)
+        
+        # Initialize hidden state
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(x.device)
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(x.device)
+        
+        # Forward propagate LSTM
+        lstm_out, (h_n, c_n) = self.lstm(x_proj, (h0, c0))
         
         # Use the last output for classification
         last_output = lstm_out[:, -1, :]
@@ -161,13 +212,15 @@ class LibrasInference:
         
         # Load normalization parameters for alphabet if available
         norm_file = os.path.join(self.models_dir, 'normalization_params.npz')
+        logger.info(f"Looking for normalization file at: {norm_file}")
+        logger.info(f"File exists: {os.path.exists(norm_file)}")
         if os.path.exists(norm_file):
             norm_data = np.load(norm_file)
             self.landmark_mean = norm_data['mean']
             self.landmark_std = norm_data['std']
-            logger.info("Loaded alphabet normalization parameters")
+            logger.info(f"Loaded alphabet normalization parameters - mean range: [{self.landmark_mean.min():.3f}, {self.landmark_mean.max():.3f}], std range: [{self.landmark_std.min():.3f}, {self.landmark_std.max():.3f}]")
         else:
-            logger.warning("No alphabet normalization parameters found, using defaults")
+            logger.warning(f"No alphabet normalization parameters found at {norm_file}, using defaults")
         
         # Load normalization parameters for phrases if available
         phrase_norm_file = os.path.join(self.models_dir, 'phrase_normalization_params.npz')
@@ -185,14 +238,37 @@ class LibrasInference:
     def load_models(self):
         """Load pretrained models"""
         try:
+            import json
+            
             # Load alphabet model
             alphabet_path = os.path.join(self.models_dir, 'alphabet_model.pt')
             if os.path.exists(alphabet_path):
-                self.alphabet_model = AlphabetMLP()
+                # Try to load metadata to get actual parameters
+                alphabet_metadata_path = os.path.join(self.models_dir, 'alphabet_model_metadata.json')
+                hidden_size = 256  # Default from improved model
+                num_classes = 24  # Default
+                dropout_rate = 0.4  # Default
+                
+                if os.path.exists(alphabet_metadata_path):
+                    with open(alphabet_metadata_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        hidden_size = metadata.get('hidden_size', 256)
+                        num_classes = metadata.get('num_classes', 24)
+                        dropout_rate = metadata.get('dropout_rate', 0.4)
+                        stored_classes = metadata.get('classes', None)
+                        if stored_classes:
+                            self.alphabet_classes = stored_classes
+                            logger.info(f"Loaded alphabet classes from metadata: {len(stored_classes)} classes")
+                
+                self.alphabet_model = AlphabetMLP(
+                    hidden_size=hidden_size,
+                    num_classes=num_classes,
+                    dropout_rate=dropout_rate
+                )
                 self.alphabet_model.load_state_dict(torch.load(alphabet_path, map_location=self.device))
                 self.alphabet_model.to(self.device)
                 self.alphabet_model.eval()
-                logger.info("Alphabet model loaded successfully")
+                logger.info(f"Alphabet model loaded successfully (hidden_size={hidden_size}, num_classes={num_classes})")
             else:
                 logger.warning(f"Alphabet model not found at {alphabet_path}")
                 # Create dummy model for testing
@@ -206,22 +282,35 @@ class LibrasInference:
                 # Try to load metadata to get actual classes and num_classes
                 metadata_path = os.path.join(self.models_dir, 'phrase_model_metadata.json')
                 num_classes = 15  # Default
+                hidden_size = 128  # Default from improved model
+                num_layers = 3  # Default from improved model
+                seq_length = 30  # Default
+                dropout_rate = 0.4  # Default
                 
                 if os.path.exists(metadata_path):
-                    import json
                     with open(metadata_path, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                         num_classes = metadata.get('num_classes', 15)
+                        hidden_size = metadata.get('hidden_size', 128)
+                        num_layers = metadata.get('num_layers', 3)
+                        seq_length = metadata.get('sequence_length', 30)
+                        dropout_rate = metadata.get('dropout_rate', 0.4)
                         stored_classes = metadata.get('classes', None)
                         if stored_classes:
                             self.phrase_classes = stored_classes
                             logger.info(f"Loaded phrase classes from metadata: {len(stored_classes)} classes")
                 
-                self.phrase_model = PhraseLSTM(num_classes=num_classes)
+                self.phrase_model = PhraseLSTM(
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                    num_classes=num_classes,
+                    seq_length=seq_length,
+                    dropout_rate=dropout_rate
+                )
                 self.phrase_model.load_state_dict(torch.load(phrase_path, map_location=self.device))
                 self.phrase_model.to(self.device)
                 self.phrase_model.eval()
-                logger.info("Phrase model loaded successfully")
+                logger.info(f"Phrase model loaded successfully (hidden_size={hidden_size}, num_layers={num_layers}, num_classes={num_classes})")
             else:
                 logger.warning(f"Phrase model not found at {phrase_path}")
                 # Create dummy model for testing
@@ -246,8 +335,9 @@ class LibrasInference:
         normalized = (landmarks - self.landmark_mean) / (self.landmark_std + 1e-8)
         
         # Debug: log normalization stats occasionally
-        if logger.isEnabledFor(logging.DEBUG) and np.random.random() < 0.01:  # 1% of the time
-            logger.debug(f"Normalization stats - mean range: [{self.landmark_mean.min():.3f}, {self.landmark_mean.max():.3f}], "
+        if logger.isEnabledFor(logging.DEBUG) and np.random.random() < 0.05:  # 5% of the time
+            logger.debug(f"Normalization stats - input range: [{landmarks.min():.3f}, {landmarks.max():.3f}], "
+                        f"mean range: [{self.landmark_mean.min():.3f}, {self.landmark_mean.max():.3f}], "
                         f"std range: [{self.landmark_std.min():.3f}, {self.landmark_std.max():.3f}], "
                         f"normalized range: [{normalized.min():.3f}, {normalized.max():.3f}]")
         
@@ -283,41 +373,59 @@ class LibrasInference:
                 top3_predictions = [(self.alphabet_classes[idx], probabilities[idx]) for idx in top3_indices]
                 
                 # Threshold and quality checks for alphabet recognition
-                # WARNING: Model was trained on very limited data (221 samples), so confidence is low
-                # With 24 classes, uniform distribution would give ~4.17% per class
+                # Model was trained with 99% accuracy on 4,900 samples, so it should be confident
                 predicted_letter = self.alphabet_classes[predicted_idx]
                 
-                # Calculate confidence ratio
+                # Calculate confidence ratio (how much better is top1 than top2)
                 confidence_ratio = top3_predictions[0][1] / (top3_predictions[1][1] + 1e-8)
                 
-                # Check 1: Minimum confidence threshold (3% - very permissive due to limited training data)
-                if confidence < 0.03:
-                    logger.debug(f"Very low confidence: {confidence:.3f} | Top 3: {top3_predictions}")
-                    return None
+                # With 24 classes, uniform distribution would give ~4.17% per class
+                # If confidence is very low (< 5%), the model is uncertain
+                # If confidence is low but ratio is good (> 1.01), accept it (model is distinguishing)
                 
-                # Check 2: If confidence is above uniform expectation (>4%), be more permissive
-                # Accept if confidence > 4% and ratio > 1.02 (minimal difference)
-                if confidence > 0.04 and confidence_ratio > 1.02:
-                    logger.debug(f"Alphabet prediction (above uniform): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
-                    return predicted_letter
+                # More permissive logic for high-accuracy model:
+                # With proper normalization, model should have high confidence (>10%)
+                # If confidence is very low (<5%), likely normalization issue - be very permissive
                 
-                # Check 3: For lower confidence (3-4%), require slightly higher ratio (5%)
-                if confidence >= 0.03 and confidence <= 0.04:
-                    if confidence_ratio >= 1.05:
-                        logger.debug(f"Alphabet prediction (low conf, good ratio): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                # Classes with very few training samples (U:1, N:2, V:1, Y:1) need special handling
+                rare_classes = {'U', 'N', 'V', 'Y', 'H', 'G', 'P', 'Q', 'R', 'W'}
+                is_rare_class = predicted_letter in rare_classes
+                
+                # 1. High confidence (>10%) - accept if ratio > 1.05
+                # For rare classes, require higher ratio (>1.10) to reduce false positives
+                if confidence > 0.10:
+                    required_ratio = 1.10 if is_rare_class else 1.05
+                    if confidence_ratio > required_ratio:
+                        if is_rare_class:
+                            logger.debug(f"Alphabet prediction (high conf, RARE CLASS): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                        else:
+                            logger.debug(f"Alphabet prediction (high conf): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                        return predicted_letter
+                    else:
+                        logger.debug(f"Uncertain prediction - top 2 too close: {confidence:.3f} (ratio: {confidence_ratio:.2f}, required: {required_ratio:.2f}) | Top 3: {top3_predictions}")
+                        return None
+                
+                # 2. Medium confidence (5-10%) - accept if ratio > 1.02
+                if confidence >= 0.05 and confidence <= 0.10:
+                    if confidence_ratio > 1.02:
+                        logger.debug(f"Alphabet prediction (medium conf): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
                         return predicted_letter
                     else:
                         logger.debug(f"Uncertain prediction - top 2 too close: {confidence:.3f} (ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
                         return None
                 
-                # Check 4: For higher confidence (>5%), require ratio > 1.08
-                if confidence > 0.05 and confidence_ratio < 1.08:
-                    logger.debug(f"Uncertain prediction - top 2 too close: {confidence:.3f} (ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
-                    return None
+                # 3. Low confidence (4-5%) - very permissive, accept if ratio >= 1.00 (any preference)
+                if confidence >= 0.04 and confidence < 0.05:
+                    if confidence_ratio >= 1.00:
+                        logger.debug(f"Alphabet prediction (low conf, permissive): {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
+                        return predicted_letter
+                    else:
+                        logger.debug(f"Low confidence prediction: {confidence:.3f}, returning UNKNOWN | Top 3: {top3_predictions}")
+                        return None
                 
-                # All checks passed - accept prediction
-                logger.debug(f"Alphabet prediction: {predicted_letter} (confidence: {confidence:.3f}, ratio: {confidence_ratio:.2f}) | Top 3: {top3_predictions}")
-                return predicted_letter
+                # 4. Very low confidence (<4%) - reject (likely uniform distribution)
+                logger.debug(f"Very low confidence prediction: {confidence:.3f}, returning UNKNOWN | Top 3: {top3_predictions}")
+                return None
         
         except Exception as e:
             logger.error(f"Error in alphabet prediction: {e}")
@@ -375,7 +483,8 @@ class LibrasInference:
                 confidence = probabilities[predicted_idx]
                 
                 # Return prediction if confidence is high enough
-                if confidence > 0.5:  # Threshold for phrase recognition (reduced from 0.6)
+                # Increased threshold to reduce false positives that interfere with alphabet recognition
+                if confidence > 0.6:  # Threshold for phrase recognition (increased to reduce interference)
                     # Get the predicted class from the model
                     if self.phrase_classes is not None:
                         predicted_class = self.phrase_classes[predicted_idx]

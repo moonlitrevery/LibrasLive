@@ -54,8 +54,10 @@ def initialize_models():
     global inference_engine, tts_manager
     
     try:
-        # Initialize inference engine
-        inference_engine = LibrasInference()
+        # Initialize inference engine with correct models directory
+        import os
+        models_dir = os.path.join(os.path.dirname(__file__), 'models')
+        inference_engine = LibrasInference(models_dir=models_dir)
         logger.info("Inference engine initialized successfully")
         
         # Initialize TTS manager
@@ -200,8 +202,14 @@ def handle_landmarks(data):
                 logger.debug(f"Phrase prediction: {phrase_pred}")
             
             # Determine which prediction to use
-            # Priority: phrase > alphabet (if confidence is high enough)
-            final_prediction = phrase_pred if phrase_pred and phrase_pred != "UNKNOWN" else alphabet_pred
+            # Priority: phrase > alphabet, BUT only if phrase has high confidence (>60%)
+            # Otherwise, prefer alphabet prediction (more reliable for single letters)
+            if phrase_pred and phrase_pred != "UNKNOWN":
+                # Phrase predictions are less reliable, so only use if alphabet is None
+                # or if we're clearly in phrase mode (user making longer movements)
+                final_prediction = phrase_pred if not alphabet_pred else alphabet_pred
+            else:
+                final_prediction = alphabet_pred
             
             if final_prediction:
                 logger.debug(f"Final prediction (before smoothing): {final_prediction}, buffer size: {len(prediction_buffer)}")
